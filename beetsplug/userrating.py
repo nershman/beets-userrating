@@ -15,6 +15,9 @@ from beets import mediafile
 from beets import plugins
 from beets import ui
 from beets.dbcore import types
+from mutagen.id3 import Frame
+from mutagen.id3._frames import POPM
+
 
 class UserRatingsPlugin(plugins.BeetsPlugin):
     """
@@ -47,6 +50,7 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
         userrating_field = mediafile.MediaField(
             MP3UserRatingStorageStyle(_log=self._log),
             UserRatingStorageStyle(_log=self._log),
+            ASFRatingStorageStyle(_log=self._log),
             out_type=int
         )
 
@@ -97,12 +101,13 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
         self._log.debug(u'Found rating {0}', rating)
 
         if rating:
-            item['userrating'] = rating;
+            item['userrating'] = rating
             item.store()
             self._log.debug(u'Applied rating {0}', item['userrating'])
         else:
             # We should consider asking here
             self._log.debug(u'No rating found')
+
 
 class MP3UserRatingStorageStyle(mediafile.MP3StorageStyle):
     """
@@ -112,18 +117,19 @@ class MP3UserRatingStorageStyle(mediafile.MP3StorageStyle):
     any conversion, just look for the various possible tags
 
     """
+    TAG = 'POPM'
 
     def __init__(self, **kwargs):
-        self._log = kwargs.get ('_log')
-        super(MP3UserRatingStorageStyle, self).__init__("POPM")
+        self._log = kwargs.get('_log')
+        super(MP3UserRatingStorageStyle, self).__init__(self.TAG)
 
     # The ordered list of which "email" entries we will look
     # for/prioritize in POPM tags.  Should eventually be configurable.
-    popm_order = ["Banshee"]
+    popm_order = ["no@email", "Windows Media Player 9 Series", "rating@winamp.com", "", "Banshee"]
 
     def get(self, mutagen_file):
         # Create a map of all our email -> rating entries
-        user_ratings = {frame.email: frame.rating for frame in mutagen_file.tags.getall("POPM")}
+        user_ratings = {frame.email: frame.rating for frame in mutagen_file.tags.getall(self.TAG)}
         # Find the first entry from popm_order, or None
         return next((user_ratings.get(user) for user in self.popm_order if user in user_ratings), None)
 
@@ -132,36 +138,80 @@ class MP3UserRatingStorageStyle(mediafile.MP3StorageStyle):
 
     def set(self, mutagen_file, value):
         for user in self.popm_order:
-            mutagen_file["POPM:{0}".format (user)] = value;
+            if mutagen_file.tags.getall(self.TAG) is None:
+                mutagen_file[self.TAG] = POPM(value, user)
 
     def set_list(self, mutagen_file, values):
         raise NotImplementedError(u'MP3 Rating storage does not support lists')
 
+
 class UserRatingStorageStyle(mediafile.StorageStyle):
     """
-    A codec for user ratings in files using a generic key=value
-    format.
+    A codec for user ratings in files using an accepted format (still not normalized)
+    format which is RATING:[:@email]=value
+    Note that for FLAC/ALAC, value seems to be between 0 and 100
+    For other format, the 0 to 255 value still seems to be the accepted range.
     """
 
+    TAG = 'RATING'
+
     def __init__(self, **kwargs):
-        self._log = kwargs.get ('_log')
+        self._log = kwargs.get('_log')
         # We don't have a set tag
         super(UserRatingStorageStyle, self).__init__("")
 
     # The ordered list of which "email" entries we will look
     # for/prioritize in POPM tags.  Should eventually be configurable.
-    rating_order = ["RATING:BANSHEE"]
+    popm_order = ["no@email", "Windows Media Player 9 Series", "rating@winamp.com", "", "Banshee"]
 
     def get(self, mutagen_file):
-        return next((int (float (mutagen_file.get (tag)[0]) * 255) for tag in self.rating_order if tag in mutagen_file), None)
+        tag = self.TAG
+        return next((int(float(mutagen_file.get(tag)[0]) * 255) for tag in self.popm_order if tag in mutagen_file),
+                    None)
 
     def get_list(self, mutagen_file):
         raise NotImplementedError(u'UserRating storage does not support lists')
 
     def set(self, mutagen_file, value):
-        for tag in self.rating_order:
-            val = value / 255
-            mutagen_file[tag] = val
+        max_value = 100 if mutagen_file.type == 'flac' else 255
+        val = value / 255 * max_value
+        for user in self.popm_order:
+            mutagen_file["RATING:{0}".format(user)] = val
 
     def set_list(self, mutagen_file, values):
         raise NotImplementedError(u'UserRating storage does not support lists')
+
+
+class ASFRatingStorageStyle(mediafile.ASFStorageStyle):
+    """
+    A codec for user ratings in ASF/WMA unsing Windows MEdia player tag format
+    """
+
+    TAG = 'WM/SharedUserRating'
+
+    asf_order = ["no@email"]
+
+    def __init__(self, **kwargs):
+        self._log = kwargs.get('_log')
+        # We don't have a set tag
+        super(ASFRatingStorageStyle, self).__init__(self.TAG)
+
+    def get(self, mutagen_file):
+        # Create a map of all our email -> rating entries
+        if mutagen_file.tags.get(self.TAG) is not None:
+            user_ratings = {frame.email: frame.rating for frame in mutagen_file.tags.get(self.TAG)}
+        else:
+            user_ratings = {self.asf_order[0]: 0}
+
+        # Find the first entry from asf_order, or None
+        return next((user_ratings.get(user) for user in self.asf_order if user in user_ratings), None)
+
+    def get_list(self, mutagen_file):
+        raise NotImplementedError(u'MP3 Rating storage does not support lists')
+
+    def set(self, mutagen_file, value):
+        for user in self.asf_order:
+            mutagen_file["{0}:{1}".format(self.TAG, user)] = value
+
+    def set_list(self, mutagen_file, values):
+        raise NotImplementedError(u'MP3 Rating storage does not support lists')
