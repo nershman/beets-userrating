@@ -15,8 +15,18 @@ from beets import mediafile
 from beets import plugins
 from beets import ui
 from beets.dbcore import types
-from mutagen.id3 import Frame
+from beets.dbcore.types import Integer
+from beets.library import Item
 from mutagen.id3._frames import POPM
+
+
+class NullInteger(Integer):
+    """Same as `Integer`, but does not normalize `None` to `0` but '-1'.
+    """
+    null = None
+
+
+NULL_INTEGER = NullInteger()
 
 
 class UserRatingsPlugin(plugins.BeetsPlugin):
@@ -28,7 +38,7 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
     """
 
     item_types = {
-        'userrating': types.INTEGER
+        'userrating': NULL_INTEGER
     }
 
     def __init__(self):
@@ -54,7 +64,8 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
             out_type=int
         )
 
-        self.add_media_field('userrating', userrating_field)
+        if 'userrating' not in mediafile.MediaFile.__dict__:
+            self.add_media_field('userrating', userrating_field)
 
     # We do present a command, though it doesn't do anything as yet
     def commands(self):
@@ -63,7 +74,15 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
         """
 
         cmd = ui.Subcommand('userrating', help=u'manage user ratings for tracks')
-        cmd.func = lambda lib, opts, args: self.handle_tracks(lib.items(ui.decargs(args)))
+        cmd.func = lambda lib, opts, args: self.handle_tracks(lib.items(ui.decargs(args)), opts)
+        cmd.parser.add_option(
+            u'-u', u'--update', action='store',
+            help=u'all files will be rated with given value',
+        )
+        cmd.parser.add_option(
+            u'-o', u'--overwrite', action='store_true',
+            help=u'allow overwriting rated file (default is to skip already rated file)',
+        )
         return [cmd]
 
     def imported(self, session, task):
@@ -73,40 +92,46 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
 
         self.handle_tracks(task.imported_items())
 
-    def handle_tracks(self, items):
+    def handle_tracks(self, items, opts):
         """
         Abstract out our iteration code.
         """
 
         for item in items:
-            self.handle_track(item)
+            self.handle_track(item, opts)
 
-    def handle_track(self, item):
+    def handle_track(self, item, opts):
         """
         Ask for user rating for track and store it in the item.
 
         If user rating information is already present in the item,
         nothing is done unless ``overwrite`` has been set.
         """
+        if opts.update is None:
+            self.display_track_rating(item)
+        else:
+            self.update_track_rating(item, opts)
 
-        if (item['userrating'] != 0) and (not self.config['overwrite'].get(bool)):
-            self._log.debug(u'Skipping already-rated track {0}', item)
-            return
+    def display_track_rating(self, item):
+        if 'userrating' in item:
+            self._log.info(u'{0} is rated with {1}', item, item.userrating)
+        else:
+            self._log.warning(u'{0} is not rated', item)
 
+    def update_track_rating(self, item, opts):
+        should_write = ui.should_write()
         self._log.debug(u'Getting rating for {0}', item)
-
         # Get any rating already in the file
-        rating = mediafile.MediaFile(item.path).userrating
-
-        self._log.debug(u'Found rating {0}', rating)
-
-        if rating:
-            item['userrating'] = rating
-            item.store()
-            self._log.debug(u'Applied rating {0}', item['userrating'])
+        rating = item.userrating if 'userrating' in item else None
+        self._log.debug(u'Found rating value "{0}"', rating)
+        if not rating or opts.overwrite:
+            item['userrating'] = int(opts.update)
+            if should_write and item.try_write():
+                item.store()
+                self._log.info(u'Applied rating {0}', opts.update)
         else:
             # We should consider asking here
-            self._log.debug(u'No rating found')
+            self._log.info(u'skip already-rated track {0}', item.path)
 
 
 class MP3UserRatingStorageStyle(mediafile.MP3StorageStyle):
@@ -137,9 +162,10 @@ class MP3UserRatingStorageStyle(mediafile.MP3StorageStyle):
         raise NotImplementedError(u'MP3 Rating storage does not support lists')
 
     def set(self, mutagen_file, value):
-        for user in self.popm_order:
-            if mutagen_file.tags.getall(self.TAG) is None:
-                mutagen_file[self.TAG] = POPM(value, user)
+        if value is not None:
+            for user in self.popm_order:
+                if mutagen_file.tags.getall(self.TAG) is None:
+                    mutagen_file[self.TAG] = POPM(value, user)
 
     def set_list(self, mutagen_file, values):
         raise NotImplementedError(u'MP3 Rating storage does not support lists')
@@ -158,7 +184,7 @@ class UserRatingStorageStyle(mediafile.StorageStyle):
     def __init__(self, **kwargs):
         self._log = kwargs.get('_log')
         # We don't have a set tag
-        super(UserRatingStorageStyle, self).__init__("")
+        super(UserRatingStorageStyle, self).__init__(self.TAG)
 
     # The ordered list of which "email" entries we will look
     # for/prioritize in POPM tags.  Should eventually be configurable.
@@ -166,17 +192,19 @@ class UserRatingStorageStyle(mediafile.StorageStyle):
 
     def get(self, mutagen_file):
         tag = self.TAG
-        return next((int(float(mutagen_file.get(tag)[0]) * 255) for tag in self.popm_order if tag in mutagen_file),
+        return next((int(float(mutagen_file.get(tag)[0]) * 255) for tag in self.popm_order if
+                     mutagen_file.tags.get(self.TAG) is not None),
                     None)
 
     def get_list(self, mutagen_file):
         raise NotImplementedError(u'UserRating storage does not support lists')
 
     def set(self, mutagen_file, value):
-        max_value = 100 if mutagen_file.type == 'flac' else 255
-        val = value / 255 * max_value
-        for user in self.popm_order:
-            mutagen_file["RATING:{0}".format(user)] = val
+        if value is not None:
+            max_value = 100 if 'audio/flac' in mutagen_file.mime else 255
+            val = value / 255 * max_value
+            for user in self.popm_order:
+                mutagen_file["RATING:{0}".format(user)] = str(val)
 
     def set_list(self, mutagen_file, values):
         raise NotImplementedError(u'UserRating storage does not support lists')
@@ -199,9 +227,9 @@ class ASFRatingStorageStyle(mediafile.ASFStorageStyle):
     def get(self, mutagen_file):
         # Create a map of all our email -> rating entries
         if mutagen_file.tags.get(self.TAG) is not None:
-            user_ratings = {frame.email: frame.rating for frame in mutagen_file.tags.get(self.TAG)}
+            user_ratings = {frame.email: int(frame.rating) for frame in mutagen_file.tags.get(self.TAG)}
         else:
-            user_ratings = {self.asf_order[0]: 0}
+            user_ratings = {self.asf_order[0]: None}
 
         # Find the first entry from asf_order, or None
         return next((user_ratings.get(user) for user in self.asf_order if user in user_ratings), None)
@@ -210,8 +238,10 @@ class ASFRatingStorageStyle(mediafile.ASFStorageStyle):
         raise NotImplementedError(u'MP3 Rating storage does not support lists')
 
     def set(self, mutagen_file, value):
-        for user in self.asf_order:
-            mutagen_file["{0}:{1}".format(self.TAG, user)] = value
+        if value is not None:
+            for user in self.asf_order:
+                tag = "{0}:{1}".format(self.TAG, user)
+                mutagen_file[tag] = value
 
     def set_list(self, mutagen_file, values):
         raise NotImplementedError(u'MP3 Rating storage does not support lists')

@@ -7,7 +7,7 @@ your music files.
 
 Install package and scripts.
 
-    $ pip install https://github.com/mdorman/beets-userrating/archive/master.zip
+    $ pip install https://github.com/jphautin/beets-userrating/archive/master.zip
 
 Add the plugin to beets configuration file.
 
@@ -18,7 +18,7 @@ plugins: (...) userrating
 ## Usage
 
     beet userrating -h
-    Usage: beet ratings [options]
+    Usage: beet userrating [options]
     Options:
      -h, --help   show this help message and exit
 
@@ -29,3 +29,9 @@ plugins: (...) userrating
 It turns out that the `mpdstats` plugin was already maintaining a
 `rating` attribute.  It seemed easier to just adopt the `userrating`
 nomenclature.
+
+### What are the differences with mdorman repository ?
+
+Major changes are:
+- added support for WMA
+- added a test suite
