@@ -30,7 +30,7 @@ It turns out that the `mpdstats` plugin was already maintaining a
 `rating` attribute.  It seemed easier to just adopt the `userrating`
 nomenclature.
 
-### What are the differences with mdorman repository ?
+### What are the differences with Michael Alan Dorman repository ?
 
 Major changes are:
 - added support for WMA
