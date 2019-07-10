@@ -1,11 +1,7 @@
 import six
 import unittest
 
-from beets.library import Item
-
 from test.helper import TestHelper
-
-from beetsplug.userrating import UserRatingsPlugin
 
 
 class UserRatingsPluginTest(TestHelper, unittest.TestCase):
@@ -59,37 +55,56 @@ class UserRatingsPluginTest(TestHelper, unittest.TestCase):
     def test_cli_rating_list_without_rating(self):
         for item in self.lib.items():
             self.assertNotIn('userrating', item, '%s is not rated' % item.path)
-        self.run_command('userrating')
+        output = self.run_with_output('userrating')
+        self.assertEqual('', output)
 
     def test_cli_rating_update_without_rating(self):
         for item in self.lib.items():
             self.assertNotIn('userrating', item, '%s is not rated' % item.path)
-        self.run_command('userrating', '-u', '1')
+        output = self.run_with_output('userrating', '-u', '1')
+        self.assertEqual('', output)
         for item in self.lib.items():
             self.assertIn('userrating', item, '%s is not rated' % item.path)
             self.assertEqual(item.userrating, 1)
 
+    # check behavior of rating item in all known cases:
+    # - unrated,
+    # - rated without overwrite
+    # - rated with overwrite
     def test_cli_rating_update_with_rating(self):
+        # check the items are not rating at first
         for item in self.lib.items():
             self.assertNotIn('userrating', item, '%s is not rated' % item.path)
-        self.run_command('userrating', '-u', '1')
+        # rate the items with value '1'
+        self.run_with_output('userrating', '-u', '1')
+        for item in self.lib.items():
+            self.assertIn('userrating', item, '%s is rated' % item.path)
+            self.assertEqual(item.userrating, 1)
 
-        self.run_command('userrating', '-u', '2')
+        # rate the items with value '2' without overwrite options
+        # and check the value is not overwritten
+        self.run_with_output('userrating', '-u', '2')
         for item in self.lib.items():
             self.assertIn('userrating', item, '%s is not rated' % item.path)
             self.assertEqual(item.userrating, 1)
 
-        self.run_command('userrating', '-u', '2', '-o')
+        # rate the items value '2' with overwrite option set
+        # and check the value is overwritten
+        self.run_with_output('userrating', '-u', '2', '-o')
         for item in self.lib.items():
             self.assertIn('userrating', item, '%s is not rated' % item.path)
             self.assertEqual(item.userrating, 2)
 
     def test_cli_rating_list_with_rating(self):
         for item in self.lib.items():
+            self.assertNotIn('userrating', item, '%s is not rated' % item.path)
+        for item in self.lib.items():
             self._reset_userrating(item, 1)
         for item in self.lib.items():
             self.assertIn('userrating', item, '%s is not rated' % item.path)
-        self.run_command('userrating')
+            self.assertEqual(item.userrating, 1)
+        output = self.run_with_output('userrating')
+        self.assertEqual('', output)
 
 
 def suite():
