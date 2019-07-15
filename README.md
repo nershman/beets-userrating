@@ -44,10 +44,10 @@ Players that are supported when importing ratings :
 
 |           Player        | mp3 | wma | flac |
 | ------------------------|-----|-----|------|
-| Windows Media Pmayer 9+ |  X  |     |      | 
+| Windows Media Player 9+ |  X  |     |      | 
 | Banshee                 |  X  |     |      | 
 | Media Monkey            |  X  |     |      | 
-| Quodlibet               |  x  |     |      | 
+| Quod libet              |  x  |     |      | 
 | Winamp                  |  x  |     |      | 
 
 
