@@ -376,11 +376,11 @@ class TestHelper(object):
             items.append(item)
         return items
 
-    def add_album_fixture(self, track_count=1, ext='mp3'):
+    def add_album_fixture(self, track_count=1, ext='mp3',filename='full'):
         """Add an album with files to the database.
         """
         items = []
-        path = os.path.join(_common.RSRC, util.bytestring_path('full.' + ext))
+        path = os.path.join(_common.RSRC, util.bytestring_path(filename + '.' + ext))
         for i in range(track_count):
             item = Item.from_path(path)
             item.album = u'\u00e4lbum'  # Check unicode paths
@@ -579,6 +579,7 @@ def generate_album_info(album_id, track_values):
 
     return album
 
+
 ALBUM_INFO_FIELDS = ['album', 'album_id', 'artist', 'artist_id',
                      'asin', 'albumtype', 'va', 'label',
                      'artist_sort', 'releasegroup_id', 'catalognum',
@@ -602,6 +603,7 @@ def generate_track_info(track_id='track info', values={}):
     for field, value in values.items():
         setattr(track, field, value)
     return track
+
 
 TRACK_INFO_FIELDS = ['artist', 'artist_id', 'artist_sort',
                      'disctitle', 'artist_credit', 'data_source',

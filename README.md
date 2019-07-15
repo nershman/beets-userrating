@@ -35,3 +35,19 @@ nomenclature.
 Major changes are:
 - added support for WMA
 - added a test suite
+- add notion of scaler to be able to adapt value for any players
+- add an import function (you can import rating on existing item of the library)
+
+### Players supported
+
+Players that are supported when importing ratings :
+
+|           Player        | mp3 | wma | flac |
+| ------------------------|-----|-----|------|
+| Windows Media Pmayer 9+ |  X  |     |      | 
+| Banshee                 |  X  |     |      | 
+| Media Monkey            |  X  |     |      | 
+| Quodlibet               |  x  |     |      | 
+| Winamp                  |  x  |     |      | 
+
+

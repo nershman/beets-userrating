@@ -19,6 +19,11 @@ from beets.dbcore.types import Integer
 from beets.library import Item
 from mutagen.id3._frames import POPM
 
+from beetsplug.banshee import Mp3BansheeScaler
+from beetsplug.mm import Mp3MediaMonkeyScaler
+from beetsplug.scaler import Mp3QuodlibetScaler, Mp3WinampScaler
+from beetsplug.wmp import Mp3WindowsMediaPlayerScaler
+
 
 class NullInteger(Integer):
     """Same as `Integer`, but does not normalize `None` to `0` but '-1'.
@@ -80,8 +85,16 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
             help=u'all files will be rated with given value',
         )
         cmd.parser.add_option(
+            u'-i', u'--imported', action='store_true',
+            help=u'all files will be rated if possible with known players value in file',
+        )
+        cmd.parser.add_option(
             u'-o', u'--overwrite', action='store_true',
             help=u'allow overwriting rated file (default is to skip already rated file)',
+        )
+        cmd.parser.add_option(
+            u'-a', u'--all', action='store_true',
+            help=u'write rating for all players (default is to write only rating of existing players)',
         )
         return [cmd]
 
@@ -89,14 +102,19 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
         """
         Add rating info to items of ``task`` during import.
         """
-
-        self.handle_tracks(task.imported_items())
+        opts = object()
+        opts.imported = True
+        opts.update = False
+        opts.overwrite = False
+        opts.all = False
+        self.handle_tracks(task.imported_items(), opts)
 
     def handle_tracks(self, items, opts):
         """
         Abstract out our iteration code.
         """
-
+        if len(items) == 0:
+            self._log.warning("no item found.")
         for item in items:
             self.handle_track(item, opts)
 
@@ -107,16 +125,36 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
         If user rating information is already present in the item,
         nothing is done unless ``overwrite`` has been set.
         """
-        if opts.update is None:
+        if opts.update is None and opts.imported is None:
             self.display_track_rating(item)
         else:
-            self.update_track_rating(item, opts)
+            if opts.imported:
+                self.import_track_rating(item, opts)
+            if opts.update:
+                self.update_track_rating(item, opts)
 
     def display_track_rating(self, item):
         if 'userrating' in item:
             self._log.info(u'{0} is rated with {1}', item, item.userrating)
         else:
             self._log.warning(u'{0} is not rated', item)
+
+    def import_track_rating(self, item, opts):
+        should_write = ui.should_write()
+        self._log.debug(u'Getting rating for {0}', item)
+        # Get any rating already in the file
+        rating = item.userrating if 'userrating' in item else None
+        self._log.debug(u'Found rating value "{0}"', rating)
+        imported_rating = mediafile.MediaFile(item.path).userrating
+        self._log.debug(u'Found imported rating value "{0}"', imported_rating)
+        if not rating or opts.overwrite:
+            item['userrating'] = int(imported_rating)
+            if should_write and item.try_write():
+                item.store()
+                self._log.info(u'Applied rating {0}', imported_rating)
+        else:
+            # We should consider asking here
+            self._log.info(u'skip already-rated track {0}', item.path)
 
     def update_track_rating(self, item, opts):
         should_write = ui.should_write()
@@ -144,28 +182,35 @@ class MP3UserRatingStorageStyle(mediafile.MP3StorageStyle):
     """
     TAG = 'POPM'
 
+    scalers = [Mp3WindowsMediaPlayerScaler(), Mp3MediaMonkeyScaler(), Mp3BansheeScaler(), Mp3QuodlibetScaler(),
+               Mp3WinampScaler()]
+
     def __init__(self, **kwargs):
         self._log = kwargs.get('_log')
         super(MP3UserRatingStorageStyle, self).__init__(self.TAG)
 
-    # The ordered list of which "email" entries we will look
-    # for/prioritize in POPM tags.  Should eventually be configurable.
-    popm_order = ["no@email", "Windows Media Player 9 Series", "rating@winamp.com", "", "Banshee"]
-
     def get(self, mutagen_file):
         # Create a map of all our email -> rating entries
         user_ratings = {frame.email: frame.rating for frame in mutagen_file.tags.getall(self.TAG)}
-        # Find the first entry from popm_order, or None
-        return next((user_ratings.get(user) for user in self.popm_order if user in user_ratings), None)
+        if len(user_ratings) > 0:
+            self._log.info("found raw ratings:")
+            for key in user_ratings:
+                self._log.info("%30s:%5s" % (key, user_ratings[key]))
+        for scaler in self.scalers:
+            key = scaler.known(user_ratings)
+            if key is not None:
+                return scaler.scale(user_ratings[key])
+        return None
 
     def get_list(self, mutagen_file):
         raise NotImplementedError(u'MP3 Rating storage does not support lists')
 
     def set(self, mutagen_file, value):
         if value is not None:
-            for user in self.popm_order:
-                if mutagen_file.tags.getall(self.TAG) is None:
-                    mutagen_file[self.TAG] = POPM(value, user)
+            existing_ratings = {frame.email for frame in mutagen_file.tags.getall(self.TAG)}
+            for scaler in self.scalers:
+                if scaler.name in existing_ratings:
+                    mutagen_file[self.TAG] = POPM(scaler.name, scaler.unscale(value))
 
     def set_list(self, mutagen_file, values):
         raise NotImplementedError(u'MP3 Rating storage does not support lists')

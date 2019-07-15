@@ -107,6 +107,8 @@ class UserRatingsPluginTest(TestHelper, unittest.TestCase):
         self.assertEqual('', output)
 
 
+
+
 def suite():
     return unittest.TestLoader().loadTestsFromName(__name__)
 
