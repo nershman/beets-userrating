@@ -21,7 +21,7 @@ from mutagen.id3._frames import POPM
 
 from beetsplug.banshee import Mp3BansheeScaler
 from beetsplug.mm import Mp3MediaMonkeyScaler
-from beetsplug.scaler import Mp3QuodlibetScaler, Mp3WinampScaler
+from beetsplug.scaler import Mp3QuodlibetScaler, Mp3WinampScaler, Mp3BeetsScaler
 from beetsplug.wmp import Mp3WindowsMediaPlayerScaler
 
 
@@ -43,7 +43,8 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
     """
 
     item_types = {
-        'userrating': NULL_INTEGER
+        'userrating': NULL_INTEGER,
+        'externalrating': NULL_INTEGER
     }
 
     def __init__(self):
@@ -54,6 +55,8 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
             'auto': True,
             # Should we overwrite an existing entry?
             'overwrite': False,
+            # Should we sync others player ratings when updating a rating
+            'sync_ratings': True
         })
 
         # Add importing ratings to the import process
@@ -63,14 +66,26 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
         # Given the complexity of the storage style implementations, I
         # find it handy to allow them to do unified logging.
         userrating_field = mediafile.MediaField(
-            MP3UserRatingStorageStyle(_log=self._log),
-            UserRatingStorageStyle(_log=self._log),
-            ASFRatingStorageStyle(_log=self._log),
+            MP3UserRatingStorageStyle(_log=self._log, _is_external=False),
+            UserRatingStorageStyle(_log=self._log, _is_external=False),
+            ASFRatingStorageStyle(_log=self._log, _is_external=False),
+            out_type=int
+        )
+
+        externalrating_field = mediafile.MediaField(
+            MP3UserRatingStorageStyle(_log=self._log, _is_external=True),
+            UserRatingStorageStyle(_log=self._log, _is_external=True),
+            ASFRatingStorageStyle(_log=self._log, _is_external=True),
             out_type=int
         )
 
         if 'userrating' not in mediafile.MediaFile.__dict__:
             self.add_media_field('userrating', userrating_field)
+
+        # this is only to be able to import existing value to beet userrating
+        # and export/sync updated values.
+        if 'externalrating' not in mediafile.MediaFile.__dict__:
+            self.add_media_field('externalrating', externalrating_field)
 
     # We do present a command, though it doesn't do anything as yet
     def commands(self):
@@ -93,8 +108,12 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
             help=u'allow overwriting rated file (default is to skip already rated file)',
         )
         cmd.parser.add_option(
+            u'-s',u'--sync', action='store',
+            help=u'write rating for existing players rating (default is to not update any players rating but beets)',
+        )
+        cmd.parser.add_option(
             u'-a', u'--all', action='store_true',
-            help=u'write rating for all players (default is to write only rating of existing players)',
+            help=u'write rating for all known players (default is to not update any players rating but beets)',
         )
         return [cmd]
 
@@ -107,6 +126,7 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
         opts.update = False
         opts.overwrite = False
         opts.all = False
+        opts.sync = False
         self.handle_tracks(task.imported_items(), opts)
 
     def handle_tracks(self, items, opts):
@@ -145,16 +165,17 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
         # Get any rating already in the file
         rating = item.userrating if 'userrating' in item else None
         self._log.debug(u'Found rating value "{0}"', rating)
-        imported_rating = mediafile.MediaFile(item.path).userrating
-        self._log.debug(u'Found imported rating value "{0}"', imported_rating)
-        if not rating or opts.overwrite:
-            item['userrating'] = int(imported_rating)
-            if should_write and item.try_write():
-                item.store()
-                self._log.info(u'Applied rating {0}', imported_rating)
-        else:
-            # We should consider asking here
-            self._log.info(u'skip already-rated track {0}', item.path)
+        if 'externalrating' in item:
+            imported_rating = item.externalrating
+            self._log.debug(u'Found external rating value "{0}"', imported_rating)
+            if not rating or opts.overwrite:
+                item.userrating = int(imported_rating)
+                if should_write and item.try_write():
+                    item.store()
+                    self._log.info(u'Applied rating {0}', imported_rating)
+            else:
+                # We should consider asking here
+                self._log.info(u'skip already-rated track {0}', item.path)
 
     def update_track_rating(self, item, opts):
         should_write = ui.should_write()
@@ -164,6 +185,8 @@ class UserRatingsPlugin(plugins.BeetsPlugin):
         self._log.debug(u'Found rating value "{0}"', rating)
         if not rating or opts.overwrite:
             item['userrating'] = int(opts.update)
+            if opts.sync or opts.all:
+                item['externalrating'] = int(opts.update)
             if should_write and item.try_write():
                 item.store()
                 self._log.info(u'Applied rating {0}', opts.update)
@@ -182,28 +205,36 @@ class MP3UserRatingStorageStyle(mediafile.MP3StorageStyle):
     """
     TAG = 'POPM'
 
-    scalers = [Mp3WindowsMediaPlayerScaler(), Mp3MediaMonkeyScaler(), Mp3BansheeScaler(), Mp3QuodlibetScaler(),
-               Mp3WinampScaler()]
+    _KNOWN_EXTERNAL_SCALERS = [Mp3WindowsMediaPlayerScaler(), Mp3MediaMonkeyScaler(), Mp3BansheeScaler(),
+                               Mp3QuodlibetScaler(),
+                               Mp3WinampScaler()]
 
     def __init__(self, **kwargs):
         self._log = kwargs.get('_log')
+        self._is_external = kwargs.get('_is_external')
         super(MP3UserRatingStorageStyle, self).__init__(self.TAG)
+        if self._is_external:
+            self.scalers = MP3UserRatingStorageStyle._KNOWN_EXTERNAL_SCALERS
+        else:
+            self.scalers = [Mp3BeetsScaler()]
 
     def get(self, mutagen_file):
         # Create a map of all our email -> rating entries
         user_ratings = {frame.email: frame.rating for frame in mutagen_file.tags.getall(self.TAG)}
         if len(user_ratings) > 0:
             self._log.info("found raw ratings:")
-            for key in user_ratings:
-                self._log.info("%30s:%5s" % (key, user_ratings[key]))
+            for rating_id, rating_value in user_ratings.items():
+                self._log.info("%30s:%5s" % (rating_id, rating_value))
         for scaler in self.scalers:
             key = scaler.known(user_ratings)
             if key is not None:
-                return scaler.scale(user_ratings[key])
+                result = scaler.scale(user_ratings[key])
+                return result
         return None
 
     def get_list(self, mutagen_file):
-        raise NotImplementedError(u'MP3 Rating storage does not support lists')
+            raise NotImplementedError(u'MP3 Rating storage does not support lists')
+
 
     def set(self, mutagen_file, value):
         if value is not None:
@@ -211,6 +242,7 @@ class MP3UserRatingStorageStyle(mediafile.MP3StorageStyle):
             for scaler in self.scalers:
                 if scaler.name in existing_ratings:
                     mutagen_file[self.TAG] = POPM(scaler.name, scaler.unscale(value))
+
 
     def set_list(self, mutagen_file, values):
         raise NotImplementedError(u'MP3 Rating storage does not support lists')
@@ -228,7 +260,7 @@ class UserRatingStorageStyle(mediafile.StorageStyle):
 
     def __init__(self, **kwargs):
         self._log = kwargs.get('_log')
-        # We don't have a set tag
+        self._is_external = kwargs.get('_is_external')
         super(UserRatingStorageStyle, self).__init__(self.TAG)
 
     # The ordered list of which "email" entries we will look
@@ -266,7 +298,7 @@ class ASFRatingStorageStyle(mediafile.ASFStorageStyle):
 
     def __init__(self, **kwargs):
         self._log = kwargs.get('_log')
-        # We don't have a set tag
+        self._is_external = kwargs.get('_is_external')
         super(ASFRatingStorageStyle, self).__init__(self.TAG)
 
     def get(self, mutagen_file):

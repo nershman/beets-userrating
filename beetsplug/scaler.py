@@ -45,3 +45,8 @@ class Mp3QuodlibetScaler(Scaler):
 class Mp3WinampScaler(Scaler):
     def __init__(self):
         super(Mp3WinampScaler, self).__init__('rating@winamp.com')
+
+
+class Mp3BeetsScaler(Scaler):
+    def __init__(self):
+        super(Mp3BeetsScaler, self).__init__('rating@beets.io')
