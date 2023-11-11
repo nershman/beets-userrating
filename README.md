@@ -1,3 +1,8 @@
+## goal of this fork currently
+* add an option to "import" ratings using some generic field either already in beets library or in the files
+    * my specific use case is having plex ratings saved to its own flexattr already and I want those written to a format usable by players. i.e. just write the plex flexattr to a new flex attr that this plugin can then write to files.     
+
+
 # User rating support for Beets
 
 The *beet userrating* plugin reads and manages a `userrating` tag on
